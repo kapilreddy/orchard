@@ -80,12 +80,7 @@
     (merge meta-map {:see-also see-also})
     meta-map))
 
-(defn- maybe-protocol
-  [info]
-  (if-let [prot-meta (meta (:protocol info))]
-    (merge info {:file (:file prot-meta)
-                 :line (:line prot-meta)})
-    info))
+
 
 (defn- map-seq [x]
   (if (seq x)
@@ -105,6 +100,30 @@
          ;; TODO: Preserve and display the exception info
          (catch Exception _
            nil))))
+
+(defn- maybe-protocol
+  [info]
+  (let [prot-meta (meta (:protocol info))
+        n-info (merge info {:file (:file prot-meta)
+                            :line (:line prot-meta)})]
+    (if-let [p (:protocol n-info)]
+      (let [proto (deref p)
+            x (filter #(extends? proto
+                                 %)
+                      (filter #(class? %)
+                              (map val (mapcat ns-imports (all-ns)))))
+            xs (map (fn [x]
+                      (let [xs (str/split (pr-str x)
+                                          #"\.")]
+                        (str (str/replace (str/join  "." (drop-last xs))
+                                          #"\_"
+                                          "-")
+                             "/map->"
+                             (last xs))))
+                    x)]
+        (assoc n-info
+               :candidates xs))
+      (assoc info :candidates []))))
 
 (defn resolve-aliases
   "Retrieve the ns aliases for `ns`.
@@ -162,7 +181,8 @@
 
 (def var-meta-whitelist
   [:ns :name :doc :file :arglists :forms :macro :special-form
-   :protocol :line :column :static :added :deprecated :resource])
+   :protocol :line :column :static :added :deprecated :resource
+   :candidates])
 
 ;; TODO: Split the responsibility of finding meta and normalizing the meta map.
 (defn var-meta
@@ -177,7 +197,19 @@
                         map-seq
                         maybe-add-file
                         maybe-add-url
-                        (update :ns ns-name))]
+                        (update :ns ns-name))
+           meta-map (update-in meta-map
+                               [:candidates]
+                               (fn [xs]
+                                 (-> (into {}
+                                           (map (fn [s]
+                                                  [s (-> (:ns meta-map)
+                                                         (resolve-var (misc/as-sym s))
+                                                         (var-meta))])
+                                                xs))
+                                     (assoc (str (:protocol meta-map))
+                                            (dissoc meta-map
+                                                    :candidates)))))]
        (->> meta-map
             (maybe-add-spec v)
             (maybe-add-see-also v))))))
